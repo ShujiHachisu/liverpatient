@@ -1,0 +1,774 @@
+---
+title: "Liver Patient"
+author: "Shuji Hachisu"
+date: "20/02/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Executive Summary
+
+This report explores liver patients in India. The liver patients will be analysed with respect to sex, age and various protein readings taken from the blood. Machine learning (ML) models to predict whether a given patient has a liver disease or not were constructed. The best performing model used the k-nearest neighbor algorithm on principal components and achieved: 62% precision, 47% sensitivity, 88% specificity and 61% balanced accuracy. 
+
+
+# Method and Analysis
+
+In this project, a disease prediction system will be created by applying ML principles to publicly available patient records. The full data set can be found here: https://www.kaggle.com/uciml/indian-liver-patient-records. 
+
+The data set has the following fields:
+
+* Age of the patient (n.b. patient whose age is > 89 is listed as being 90)
+* Gender of the patient
+* Total Bilirubin
+* Direct Bilirubin
+* Alkaline Phosphotase
+* Alamine Aminotransferase
+* Aspartate Aminotransferase
+* Total Protiens
+* Albumin
+* Albumin and Globulin Ratio
+* Dataset: field used to split the data into two sets (patient with liver disease is assigned the value 2, and no disease is assigned the value 1)
+
+## Create training and validation sets
+
+Liver patient data set will be downloaded from the web, and the files will be read and loaded into R as a data frame. The data frame will be given appropriate column names, and some field will be further processed (e.g. Dataset column is modified so no disease is represented by 0, and presence of disease is represented by 1). The full data set will be split into training and test sets to build the ML model and validate the ML model respectively.
+
+```{r message=FALSE, warning=FALSE}
+
+################################################################################
+# Create training set, validation set (final hold-out test set)
+################################################################################
+
+
+# Note: this process could take a couple of minutes
+
+# install packages if needed
+
+# setup libraries
+
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+if(!require(corrplot)) install.packages("corrplot", repos = "http://cran.us.r-project.org")
+
+# load libraries
+
+library(tidyverse)
+library(caret)
+library(data.table)
+library(corrplot)
+
+# download data, create dataframe, name columns, create factors, and omit rows with blank values
+
+dl <- tempfile()
+download.file("https://archive.ics.uci.edu/ml/machine-learning-databases/00225/Indian%20Liver%20Patient%20Dataset%20(ILPD).csv", dl)
+
+# read csv file and store in liverPatient
+
+liverPatient <- read.csv(file = dl)
+
+# set column names
+
+colnames(liverPatient) <- c("Age", "Gender", "Total_Bilirubin", "Direct_Bilirubin",
+                      "Alkaline_Phosphotase", "Alamine_Aminotransferase", "Aspartate_Aminotransferase",
+                      "Total_Protiens", "Albumin", "Albumin_and_Globulin_Ratio", "Dataset")
+
+# covert DataSet columns so that healthy patients are zero and sick patients are 1.
+# Convert gendar into factor and drop rows with empty fields
+
+liverPatient <-
+  liverPatient %>%
+  mutate(Dataset = factor(Dataset - 1),
+         Gender = factor(Gender)) %>%
+  na.omit()
+
+
+# create both training set and validation set 
+# Validation set will be 10% of data set
+
+set.seed(1, sample.kind="Rounding") # if using R 3.5 or earlier, use `set.seed(1)`
+test_index <- createDataPartition(y = liverPatient$Dataset, times = 1, p = 0.1, list = FALSE)
+
+training_set <- liverPatient[-test_index,]
+test_set <- liverPatient[test_index,]
+
+# remove unnecessary variable and data sets
+rm(dl, test_index, liverPatient)
+```
+
+## Explore and analyse the data set and its features
+
+The data structure of the training set table, the first 6 rows, and their corresponding summary statistics are shown to gain insights into training sets. 
+
+```{r message=FALSE, warning=FALSE}
+
+# show first 6 rows of the training set to get insight into the table and data structure
+head(training_set)
+# show data structure, column names and number of records
+str(training_set)
+# show summary statistics of training set
+summary(training_set)
+# training set data set has 519 records and 11 fields
+
+```
+
+The data structure of the test set table, the first 6 rows, and their corresponding summary statistics are shown to gain insights into test sets.
+
+```{r message=FALSE, warning=FALSE}
+
+# show first 6 rows of the test set to get insight into the table and data structure
+head(test_set)
+# show data structure, column names and number of records
+str(test_set)
+# show summary statistics of test set
+summary(test_set)
+# Test set has 59 records and 11 fields.
+# This will be used at the final stage to evaluated the model created using the training data set
+
+```
+
+### Analyze age
+
+The first histogram shows the age profiles of the patient records.
+
+The second normalized histogram shows that younger patients are more likely to have liver diseases than older patients. This could be because older patients are in hospital providing data for a variety of reasons, whereas youn patients have clear liver disease symptom to be there. 
+
+```{r message=FALSE, warning=FALSE}
+
+######################### age plots ############################################
+
+# plot a histogram by age for training set colored by Dataset
+training_set %>%
+  ggplot(aes(Age, fill = Dataset)) +
+  geom_histogram(binwidth = 20, color = "black") +
+  labs(title = "Age vs Number of people", y = "Number of people") +
+  scale_fill_discrete(name = "Disease status",
+                      labels = c("no disease", "liver disease"))
+
+
+# plot a normalized histogram by age for training set colored by Dataset
+training_set %>%
+  ggplot(aes(Age, fill = Dataset)) +
+  geom_histogram(binwidth = 20, color = "black", position = "fill") +
+  labs(title = "Age vs proportion of people", y = "Proportion of people") +
+  scale_fill_discrete(name = "Disease status",
+                      labels = c("no disease", "liver disease"))
+
+```
+
+### Analyze gender
+
+The first histogram shows that most patient records come from men.
+
+The second normalized histogram shows that lady patient are more likely to have liver diseases than men.
+
+```{r message=FALSE, warning=FALSE}
+
+######################### gender plots ##########################################
+
+# plot a histogram by gender for training set with proportion of Dataset shown
+# by color
+training_set %>% 
+  group_by(Dataset, Gender) %>%
+  summarize(count = n()) %>%
+  ggplot(aes(Gender, count, fill = Dataset)) + 
+  geom_col() +
+  labs(title = "Gender vs Number of people", y = "Number of people") +
+  scale_fill_discrete(name = "Disease status",
+                      labels = c("no disease", "liver disease"))
+
+# plot a normalized histogram by gender for training set with proportion of
+# Dataset shown by color
+training_set %>% 
+  group_by(Dataset, Gender) %>%
+  summarize(count = n()) %>%
+  ggplot(aes(Gender, count, fill = Dataset)) + 
+  geom_col(position = "fill") +
+  labs(title = "Gender vs proportion of people", y = "Proportion of people") +
+  scale_fill_discrete(name = "Disease status",
+                      labels = c("no disease", "liver disease"))
+
+```
+
+### Analyze Dataset
+
+The first histogram shows that most patient do not have liver diseases.
+
+The second normalized histogram shows that lady patient are more likely to have liver diseases than men similarly to the last section that analyzed by gender.
+
+```{r message=FALSE, warning=FALSE}
+
+######################### Dataset plots ########################################
+
+# plot a histogram by Dataset for training set colored by gender
+training_set %>% 
+  group_by(Dataset, Gender) %>%
+  summarize(count = n()) %>%
+  ggplot(aes(Dataset, count, fill = Gender)) +
+  geom_col() +
+  labs(title = "Liver diseased vs Number of people",
+       y = "Number of people",
+       x = "liver diasesed (no disease = 0, diseased = 1)")
+
+# plot a normalized histogram by Dataset for training set colored by gender
+training_set %>% 
+  group_by(Dataset, Gender) %>%
+  summarize(count = n()) %>%
+  ggplot(aes(Dataset, count, fill = Gender)) +
+  geom_col(position = "fill") +
+  labs(title = "Liver diseased vs proportion of people",
+       y = "Proportion of people",
+       x = "liver diasesed (no disease = 0, diseased = 1)")
+
+```
+
+### Analyze Total Bilirubin
+
+The first histogram shows that most patient have total bilirubin level less than 10 whether they have liver disease or not.
+
+The second normalize histogram shows clearly that liver diseased patient always have total bilirubin level less than 10.
+
+```{r message=FALSE, warning=FALSE}
+
+######################### Total Bilirubin plots ##########################################
+
+# Plot a histogram by Total Bilirubin colored by Dataset
+training_set %>%
+  ggplot(aes(Total_Bilirubin, fill = Dataset)) +
+  geom_histogram(binwidth = 3, color = "black") +
+  labs(title = "Total Bilirubin vs Number of people",
+       y = "Number of people",
+       x = "Total Bilirubin") +
+  scale_fill_discrete(name = "Disease status",
+                      labels = c("no disease", "liver disease"))
+
+# Plot a normalized histogram by Total Bilirubin colored by Dataset
+training_set %>%
+  ggplot(aes(Total_Bilirubin, fill = Dataset)) +
+  geom_histogram(binwidth = 3, color = "black", position = "fill") +
+  labs(title = "Total Bilirubin vs proportion of people",
+       y = "Proportion of people",
+       x = "Total Bilirubin") +
+  scale_fill_discrete(name = "Disease status",
+                      labels = c("no disease", "liver disease"))
+
+```
+
+### Analyze Direct Bilirubin
+
+The first histogram shows that most patient have Direct bilirubin level less than 5 whether they have liver disease or not.
+
+The second normalize histogram shows clearly that liver diseased patient always have Direct bilirubin level less than 5.
+
+```{r message=FALSE, warning=FALSE}
+
+######################### Direct Bilirubin plots ###############################
+
+# Plot a histogram by Direct Bilirubin colored by Dataset
+training_set %>%
+  ggplot(aes(Direct_Bilirubin, fill = Dataset)) +
+  geom_histogram(binwidth = 1, color = "black") +
+  labs(title = "Direct Bilirubin vs Number of people",
+       y = "Number of people",
+       x = "Direct Bilirubin") +
+  scale_fill_discrete(name = "Disease status",
+                      labels = c("no disease", "liver disease"))
+
+# Plot a normalized histogram by Direct Bilirubin colored by Dataset
+training_set %>%
+  ggplot(aes(Direct_Bilirubin, fill = Dataset)) +
+  geom_histogram(binwidth = 1, color = "black", position = "fill") +
+  labs(title = "Direct Bilirubin vs proportion of people",
+       y = "Proportion of people",
+       x = "Direct Bilirubin") +
+  scale_fill_discrete(name = "Disease status",
+                      labels = c("no disease", "liver disease"))
+
+```
+
+### Analyze Alkaline Phosphotase
+
+The first histogram shows that most patient have Alkaline Phosphotase level less than 500 whether they have liver disease or not.
+
+The second normalize histogram shows clearly that majority of liver diseased patient have Alkaline Phosphotase level less than 750.
+
+```{r message=FALSE, warning=FALSE}
+
+######################### Alkaline Phosphotase plots ###########################
+
+# Plot a histogram by Alkaline Phosphotase colored by Dataset
+training_set %>%
+  ggplot(aes(Alkaline_Phosphotase , fill = Dataset)) +
+  geom_histogram(binwidth = 100, color = "black") +
+  labs(title = "Alkaline Phosphotase vs Number of people",
+       y = "Number of people",
+       x = "Alkaline Phosphotase") +
+  scale_fill_discrete(name = "Disease status",
+                      labels = c("no disease", "liver disease"))
+
+# Plot a normalized histogram by Alkaline Phosphotase colored by Dataset
+training_set %>%
+  ggplot(aes(Alkaline_Phosphotase , fill = Dataset)) +
+  geom_histogram(binwidth = 100, color = "black", position = "fill") +
+  labs(title = "Alkaline Phosphotase vs Proportion of people",
+       y = "Proportion of people",
+       x = "Alkaline Phosphotase") +
+  scale_fill_discrete(name = "Disease status",
+                      labels = c("no disease", "liver disease"))
+
+```
+
+### Analyze Alamine Aminotransferase
+
+The first histogram shows that most patient have Alamine Aminotransferase level less than 250 whether they have liver disease or not.
+
+The second normalize histogram shows clearly that liver diseased patient always have Alamine Aminotransferase level less than 250.
+
+```{r message=FALSE, warning=FALSE}
+
+######################### Alamine Aminotransferase plots ########################
+
+# Plot a histogram by Alamine Aminotransferase colored by Dataset
+training_set %>%
+  ggplot(aes(Alamine_Aminotransferase , fill = Dataset)) +
+  geom_histogram(binwidth = 100, color = "black") +
+  labs(title = "Alamine Aminotransferase vs Number of people",
+       y = "Number of people",
+       x = "Alamine Aminotransferase") +
+  scale_fill_discrete(name = "Disease status",
+                      labels = c("no disease", "liver disease"))
+
+# Plot a normalized histogram by Alamine Aminotransferase colored by Dataset
+training_set %>%
+  ggplot(aes(Alamine_Aminotransferase , fill = Dataset)) +
+  geom_histogram(binwidth = 100, color = "black", position = "fill") +
+  labs(title = "Alamine Aminotransferase vs Proportion of people",
+       y = "Proportion of people",
+       x = "Alamine Aminotransferase") +
+  scale_fill_discrete(name = "Disease status",
+                      labels = c("no disease", "liver disease"))
+
+```
+
+### Analyze Aspartate Aminotransferase
+
+The first histogram shows that most patient have Aspartate Aminotransferase level less than 500 whether they have liver disease or not.
+
+The second normalize histogram shows clearly that liver diseased patients always have Aspartate Aminotransferase level less than 500.
+
+```{r message=FALSE, warning=FALSE}
+
+######################### Aspartate Aminotransferase plots #####################
+
+# Plot a histogram by Aspartate Aminotransferase colored by Dataset
+training_set %>%
+  ggplot(aes(Aspartate_Aminotransferase , fill = Dataset)) +
+  geom_histogram(binwidth = 100, color = "black") +
+  labs(title = "Aspartate Aminotransferase vs Number of people",
+       y = "Number of people",
+       x = "Aspartate Aminotransferase") +
+  scale_fill_discrete(name = "Disease status",
+                      labels = c("no disease", "liver disease"))
+
+# Plot a normalized histogram by Aspartate Aminotransferase colored by Dataset
+training_set %>%
+  ggplot(aes(Aspartate_Aminotransferase , fill = Dataset)) +
+  geom_histogram(binwidth = 100, color = "black", position = "fill") +
+  labs(title = "Aspartate Aminotransferase vs Proportion of people",
+       y = "Proportion of people",
+       x = "Aspartate Aminotransferase") +
+  scale_fill_discrete(name = "Disease status",
+                      labels = c("no disease", "liver disease"))
+
+```
+
+### Analyze Total Protein
+
+The first histogram shows that most patient have Total Protein level between 5 and 8 whether they have liver disease or not.
+
+The second normalize histogram shows clearly that liver diseased patients have varying amount of Total Protein level.
+
+```{r message=FALSE, warning=FALSE}
+
+######################### Total Protein plots ##################################
+ 
+######################### Total Protein plots ##################################
+ 
+# Plot a histogram by Total Proteins colored by Dataset
+training_set %>%
+  ggplot(aes(Total_Protiens, fill = Dataset)) +
+  geom_histogram(binwidth = 0.5, color = "black") +
+  labs(title = "Total Proteins vs Number of people",
+       y = "Number of people",
+       x = "Total Proteins") +
+  scale_fill_discrete(name = "Disease status",
+                      labels = c("no disease", "liver disease"))
+
+# Plot a normalized histogram by Total Protiens colored by Dataset
+training_set %>%
+  ggplot(aes(Total_Protiens, fill = Dataset)) +
+  geom_histogram(binwidth = 0.5, color = "black", position = "fill") +
+  labs(title = "Total Proteins vs Proportion of people",
+       y = "Proportion of people",
+       x = "Total Proteins") +
+  scale_fill_discrete(name = "Disease status",
+                      labels = c("no disease", "liver disease"))
+
+```
+
+### Analyze Albumin
+
+The first histogram shows that most patient have Albumin level between 2 and 4.5 whether they have liver disease or not.
+
+The second normalize histogram shows clearly that liver diseased patient have varying amount of Albumin level.
+
+```{r message=FALSE, warning=FALSE}
+
+######################### Albumin plots ########################################
+
+# Plot a histogram by Albumin colored by Dataset
+training_set %>%
+  ggplot(aes(Albumin, fill = Dataset)) +
+  geom_histogram(binwidth = 0.5, color = "black") +
+  labs(title = "Albumin vs Number of people",
+       y = "Number of people",
+       x = "Albumin") +
+  scale_fill_discrete(name = "Disease status",
+                      labels = c("no disease", "liver disease"))
+
+# Plot a normalized histogram by Albumin colored by Dataset
+training_set %>%
+  ggplot(aes(Albumin, fill = Dataset)) +
+  geom_histogram(binwidth = 0.5, color = "black", position = "fill") +
+  labs(title = "Albumin vs Proportion of people",
+       y = "Proportion of people",
+       x = "Albumin") +
+  scale_fill_discrete(name = "Disease status",
+                      labels = c("no disease", "liver disease"))
+
+```
+
+### Analyze Albumin and Globulin Ratio
+
+The first histogram shows that most patient have Albumin and Globulin Ratio level between 0.5 and 1.5 whether they have liver disease or not.
+
+The second normalize histogram shows clearly that liver diseased patient have varying amount of Albumin and Globulin Ratio level.
+
+```{r message=FALSE, warning=FALSE}
+
+######################### Albumin and Globulin Ratio plots #####################
+
+# Plot a histogram by Albumin and Globulin Ratio colored by Dataset
+training_set %>%
+  ggplot(aes(Albumin_and_Globulin_Ratio, fill = Dataset)) +
+  geom_histogram(binwidth = 0.2, color = "black") +
+  labs(title = "Albumin and Globulin Ratio vs Number of people",
+       y = "Number of people",
+       x = "Albumin and Globulin Ratio") +
+  scale_fill_discrete(name = "Disease status",
+                      labels = c("no disease", "liver disease"))
+
+# Plot a normalized histogram by Albumin and Globulin Ratio colored by Dataset
+training_set %>%
+  ggplot(aes(Albumin_and_Globulin_Ratio, fill = Dataset)) +
+  geom_histogram(binwidth = 0.2, color = "black", position = "fill") +
+  labs(title = "Albumin and Globulin Ratio vs Proportion of people",
+       y = "Proportion of people",
+       x = "Albumin and Globulin Ratio") +
+  scale_fill_discrete(name = "Disease status",
+                      labels = c("no disease", "liver disease"))
+
+```
+
+### Principal Component Analysis (PCA)
+
+The first 2 charts shows correlation between the 10 fields.
+
+The following pairs of field have a particularly strong correlation:
+
+* Total_Bilirubin & Direct_Bilirubin
+* Alamine_Aminotransferase & Aspartage_Aminotransferase
+* Total_Proteins & Albumin
+* Albumin_and_Globulin_Raation & Albumin
+
+The following fields have very little correlation to any other variables:
+
+* Age
+* Gender
+* Alkaline_Phosphotase
+
+PCA has been carried out on the patient data as a dimensionality reduction technique. The tabular output of the R console shows that 10 PCs have been created, and that 5 PCs take into account 99.998% of the variance in the data.
+
+The final graph of the section plots PC1 vs PC2, and shows that liver diseased patients (sick = 1 and blue) cluster in the left hand upper side of the graph. Unfortunately, liver diseased patients are overlapping significantly with non-liver diseased patients in the graph, which indicates that ML model may struggle to have a high specificity.
+
+```{r message=FALSE, warning=FALSE}
+
+###################  Principal Component Analysis (PCA)  #######################
+
+# convert test and training sets from data frames to matrices
+test_set_matrix <-
+  test_set[,1:10] %>%
+  mutate(Gender = Gender == "Male") %>%
+  as.matrix()
+
+training_set_matrix <-
+  training_set[,1:10] %>%
+  mutate(Gender = Gender == "Male") %>%
+  as.matrix()
+
+# calculate correlation between fields in the training set
+mydata_cor <- cor(training_set_matrix)
+
+# plot correlation 
+corrplot(cor(mydata_cor))
+
+# plot correlation as heat map
+palette = colorRampPalette(c("green", "white", "red")) (20)
+heatmap(x = mydata_cor, col = palette, symm = TRUE)
+
+# carry out PCA on training set
+pca <- prcomp(training_set_matrix)
+
+# show summary of PCA to gain insight on the PCs that account for most of the variance 
+summary(pca)
+
+# plot PC1 vs PC2 and color point by whehter teh patient is sick or not
+data.frame(pca$x[,1:2], Sick=training_set$Dataset) %>%
+  ggplot(aes(PC1,PC2, fill = Sick))+
+  geom_point(cex=3, pch=21) +
+  coord_fixed(ratio = 1) +
+  labs(title = "PC1 vs PC2") +
+  scale_fill_discrete(name = "Disease status",
+                      labels = c("no disease", "liver disease"))
+  
+
+```
+
+# Results
+
+ML models to predict whether a given patient has a liver disease or not are now created. The following algorithms were explored: Generalized Liner Model, Boosted Logistic Regression, Random Forest and k-nearest neighbors. The models were created using both raw data from the liver patient data set and corresponding derived principal components.
+
+With regards to measuring the performance of the models, the following metrics were used in priority order:
+
+* precision
+* sensitivity
+* specificity
+* balanced accuracy
+
+Precision was considered most important as the prevalence of liver diseased patient is low and a liver diseased predictions need high rate of confirmation. Sensitivity was considered highly important as liver disease is a serious condition and a false negative can be particularly damaging for the prognosis of the patient without proper treatment. 
+
+## create a function that returns the performance of a model in a data frame
+
+A function was created that allows the efficient exploration of ML models through the calculation of a confusion matrix and the loading of the important performance metrics into a convenient data frame.
+
+```{r message=FALSE, warning=FALSE}
+
+# create a function that returns the performance of a model in a data frame
+
+model_performance <-
+  function (model, name_of_model) {
+    # measure and record performance of model
+    cm <- confusionMatrix(predict(model, test_set), test_set$Dataset, positive = '1')
+    # create a data frame with overall precision, sensitivity, specificity and accuracy
+    data_frame(Method = name_of_model,
+               Precision = cm$byClass["Precision"],
+               sensitivity = cm$byClass["Sensitivity"],
+               Specificity = cm$byClass["Specificity"],
+               Balanced_Accuracy = cm$byClass["Balanced Accuracy"]) 
+  }
+
+```
+
+## Model 1: Generalized Linear Model (GLM)
+
+The first ML model is based on a GLM and the model is trained using both the raw liver patient data and 5 PCs that accounts for the vast majority of the variance in the data. GLM's peformance on the raw data was significantly better than that deployed the 5 PCs.
+
+66% precision was achieved, but the 35% sensitivity is unacceptably low.
+
+
+```{r message=FALSE, warning=FALSE}
+
+#################### Generalized Linear Model (GLM) ############################
+
+# create a linear model
+train_glm <- 
+  train(Dataset ~ .,
+        method = "glm",
+        data = training_set)
+
+# assess performance of results and store in a data frame
+results <- model_performance(train_glm, "linear model")
+
+# print out all the results for all the models explored above
+results %>% knitr::kable()
+
+
+# create a linear model with the 5 most significant PCs
+train_glm_pca <- 
+  train(Dataset ~ .,
+        method = "glm",
+        data = training_set,
+        preProcess = "pca",
+        trControl = trainControl(preProcOptions = list(pcaComp = 5)))
+
+# assess performance of results and add store as a new row in results
+results <- bind_rows(results, model_performance(train_glm_pca, "linear model with 5 PCs"))
+
+# print out all the results for all the models explored above
+results %>% knitr::kable()
+
+
+```
+
+## Model 2: Boosted Logistic Regression (LogitBoost)
+
+The second ML model is based on a LogitBoost and the model is trained using both the raw liver patient data and 5 PCs that accounts for the vast majority of the variance in the data. LogitBoost's performance on the raw data was better than that deployed the 5 PCs.
+
+60% precision was achieved, but the 35% sensitivity is unacceptably low when using the raw data.
+
+```{r message=FALSE, warning=FALSE}
+
+####################### Boosted Logistic Regression (LogitBoost) #############################
+
+# create a LogitBoost model   
+train_LogitBoost <- 
+  train(Dataset ~ .,
+        method = "LogitBoost",
+        data = training_set)
+
+# assess performance of results and add store as a new row in results
+results <- bind_rows(results, model_performance(train_LogitBoost, "LogitBoost"))
+
+# print out all the results for all the models explored above
+results %>% knitr::kable()
+
+
+# create a KNN model with the 5 most significant PCs
+train_LogitBoost_pca <- 
+  train(Dataset ~ .,
+        method = "LogitBoost",
+        data = training_set,
+        preProcess = "pca",
+        trControl = trainControl(preProcOptions = list(pcaComp = 5)))
+
+# assess performance of results and add store as a new row in results
+results <- bind_rows(results, model_performance(train_LogitBoost_pca, "LogitBoost with 5 PCs"))
+
+# print out all the results for all the models explored above
+results %>% knitr::kable()
+
+
+```
+
+## Model 3: Random Forest (RF)
+
+The third ML model is based on an RF and the model is trained using both the raw liver patient data and 5 PCs that accounts for the vast majority of the variance in the data. RF's performance on the raw data was worse than that deployed the 5 PCs.
+
+57% precision was achieved through the use of PCs, and the 47% sensitivity is better than GLM and LogitBoost models above.
+
+```{r message=FALSE, warning=FALSE}
+
+########################### Random Forest ######################################
+
+# create a random forest model  
+train_Rborist <- 
+  train(Dataset ~ .,
+        method = "Rborist",
+        tuneGrid = data.frame(predFixed = 2, minNode = c(3, 50)),
+        data = training_set)
+
+# assess performance of results and add store as a new row in results
+results <- bind_rows(results, model_performance(train_Rborist, "random forest"))
+
+# print out all the results for all the models explored above
+results %>% knitr::kable()
+
+
+# create a random forest with the 5 most significant PCs
+train_Rborist_pca <- 
+  train(Dataset ~ .,
+        method = "Rborist",
+        tuneGrid = data.frame(predFixed = 2, minNode = c(3, 50)),
+        data = training_set,
+        preProcess = "pca",
+        trControl = trainControl(preProcOptions = list(pcaComp = 5)))
+
+# assess performance of results and add store as a new row in results
+results <- bind_rows(results, model_performance(train_Rborist_pca, "random forest wiht with 5 PCs"))
+
+# print out all the results for all the models explored above
+results %>% knitr::kable()
+
+
+```
+
+## Model 4: k-nearest neighbors (KNN)
+
+The fourth and last ML model is based on an KNN and the model is trained using both the raw liver patient data and 5 PCs that accounts for the vast majority of the variance in the data. KNN's performance on the raw data was worse than that deployed the 5 PCs.
+
+66% precision was achieved through the use of PCs, and the 47% sensitivity is better than all previous models: GLM and LogitBoost and RF models.
+
+The last table below shows that KNN modeling was carried out using 1 to 10 PCs to demonstrate that the use of 5 PCs leads to the best performance. 
+
+```{r message=FALSE, warning=FALSE}
+
+####################### k-nearest neighbors (KNN) #############################
+
+# create a KNN model   
+train_knn <- 
+  train(Dataset ~ .,
+        method = "knn",
+        data = training_set)
+
+# assess performance of results and add store as a new row in results
+results <- bind_rows(results, model_performance(train_knn, "KNN"))
+
+# print out all the results for all the models explored above
+results %>% knitr::kable()
+
+
+# create a KNN model with the 5 most significant PCs
+train_knn_pca <- 
+  train(Dataset ~ .,
+        method = "knn",
+        data = training_set,
+        preProcess = "pca",
+        trControl = trainControl(preProcOptions = list(pcaComp = 5)))
+
+# assess performance of results and add store as a new row in results
+results <- bind_rows(results, model_performance(train_knn_pca, "KNN with 5 PCs"))
+
+# print out all the results for all the models explored above
+results %>% knitr::kable()
+
+#explore performance of model using 1-10 PCs
+knn_results <- sapply(seq(1,10), function(pc) {
+  train_knn_pca <- 
+    train(Dataset ~ .,
+          method = "knn",
+          data = training_set,
+          preProcess = "pca",
+          trControl = trainControl(preProcOptions = list(pcaComp = pc)))
+  cm <- confusionMatrix(predict(train_knn_pca, test_set), test_set$Dataset, positive = '1')
+  data_frame(PC = pc,
+             Precision = cm$byClass["Precision"],
+             sensitivity = cm$byClass["Sensitivity"],
+             Specificity = cm$byClass["Specificity"],
+             Balanced_Accuracy = cm$byClass["Balanced Accuracy"]) 
+})
+
+# print out the performance of models using different number of PCs
+knn_results
+
+
+```
+
+# Conclusion
+
+The report analysed the liver patient data set and explored a variety of sophisticated ML model to predict the liver disease status of a given patient. The best performing model used the k-nearest neighbor algorithm on principal components and achieved: 62% precision, 47% sensitivity, 88% specificity and 68% balanced accuracy.
+
+
